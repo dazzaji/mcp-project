@@ -1,3 +1,4 @@
+# gemini-server/server.py
 import asyncio
 import json
 import logging
@@ -13,7 +14,8 @@ from mcp.types import (
     CallToolResult, ErrorData, ImageContent, TextContent, Tool, EmbeddedResource,
     INVALID_PARAMS, INTERNAL_ERROR
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError  # Import ValidationError
+
 
 # Load environment variables
 load_dotenv()
@@ -49,27 +51,8 @@ class GenerateArgs(BaseModel):
     prompt: str = Field(..., description="Prompt to generate text from")
     model_config = ConfigDict(extra="allow")
 
-@server.tool(
-    name="generate",
-    description="Generates text using Gemini.",
-    input_schema=GenerateArgs.model_json_schema()
-)
-async def generate_tool(arguments: Dict) -> CallToolResult:
-    """Handles the 'generate' tool call, interacting with the Gemini API."""
-    try:
-        args = GenerateArgs(**arguments)
-    except ValidationError as e:
-        raise McpError(INVALID_PARAMS, f"Invalid 'generate' tool arguments: {e}")
 
-    try:
-        generated_text = await generate_text(args.prompt)
-        return CallToolResult(content=[TextContent(type="text", text=generated_text)])
-    except McpError as e:
-        raise # Re-raise McpErrors for client to handle
-    except Exception as e:
-        raise McpError(INTERNAL_ERROR, f"An unexpected error occurred: {e}")
-
-@server.list_tools()
+@server.list_tools()  # This stays the same
 async def list_tools() -> list[Tool]:
     """Lists available tools."""
     return [
@@ -79,6 +62,31 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {"prompt": {"type": "string"}}, "required": ["prompt"]},
         )
     ]
+
+
+@server.call_tool() # Use @server.call_tool
+async def call_tool(name: str, arguments: Dict) -> CallToolResult: # Correct signature
+    """Handles tool calls for this server. Currently supports the 'generate' tool."""
+    if name == "generate":
+        try:
+            args = GenerateArgs(**arguments) # Validation logic *moved* here
+        except ValidationError as e:
+            raise McpError(INVALID_PARAMS, f"Invalid 'generate' tool arguments: {e}")
+
+
+        try:
+            generated_text = await generate_text(args.prompt)
+            return CallToolResult(content=[TextContent(type="text", text=generated_text)])
+        except McpError as e:
+            raise  # Re-raise MCP-specific errors
+        except Exception as e:
+            raise McpError(INTERNAL_ERROR, f"An unexpected error occurred: {e}")
+    else:
+        # If another tool name is requested, return an error
+        raise McpError(INVALID_PARAMS, f"Unknown tool requested: {name}")
+
+
+
 
 async def main():
     """Main function to start the server."""
